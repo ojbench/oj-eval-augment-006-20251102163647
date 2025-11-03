@@ -81,14 +81,34 @@ void ReadMap() {
  * mind and make your decision here! Caution: you can only execute once in this function.
  */
 void Decide() {
-  // Simple Baseline Strategy:
-  // 1) If any number cell has unknown_count == number - flagged_count -> mark one unknown as mine
-  // 2) If any number cell has flagged_count == number -> auto explore around it
-  // 3) Otherwise, visit the first unknown cell
+  // Improved Baseline:
+  // 1) Auto-explore whenever flags suffice
+  // 2) Mark when unknown_count == number - flagged_count
+  // 3) Guess: pick unknown with lowest local risk estimate
   static const int dr[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
   static const int dc[8] = {-1, 0, 1, -1, 1, -1, 0, 1};
 
-  // Step 1: marking deduction
+  // Step 1: auto-explore
+  for (int i = 0; i < rows; ++i) {
+    for (int j = 0; j < columns; ++j) {
+      char ch = vision[i][j];
+      if (ch < '0' || ch > '8') continue;
+      int need = ch - '0';
+      int flagged = 0, unknown = 0;
+      for (int k = 0; k < 8; ++k) {
+        int ni = i + dr[k], nj = j + dc[k];
+        if (!inb_client(ni, nj)) continue;
+        if (vision[ni][nj] == '@') ++flagged;
+        else if (vision[ni][nj] == '?') ++unknown;
+      }
+      if (unknown > 0 && flagged == need) {
+        Execute(i, j, 2);
+        return;
+      }
+    }
+  }
+
+  // Step 2: mark one certain mine
   for (int i = 0; i < rows; ++i) {
     for (int j = 0; j < columns; ++j) {
       char ch = vision[i][j];
@@ -103,44 +123,54 @@ void Decide() {
         else if (vision[ni][nj] == '?') { ++unknown; ux = ni; uy = nj; }
       }
       if (unknown > 0 && need == flagged + unknown) {
-        // All unknown neighbors are mines; mark one of them
         Execute(ux, uy, 1);
         return;
       }
     }
   }
 
-  // Step 2: auto-explore where flags are sufficient
+  // Step 3: guess with a simple local risk metric
+  int best_r = -1, best_c = -1;
+  double best_score = 1e9;
+  // global fallback risk
+  int total_unknown = 0, total_flagged = 0;
+  for (int i = 0; i < rows; ++i) for (int j = 0; j < columns; ++j) {
+    if (vision[i][j] == '?') ++total_unknown;
+    else if (vision[i][j] == '@') ++total_flagged;
+  }
+  double global_risk = (total_unknown > 0) ? (double)std::max(0, total_mines - total_flagged) / (double)total_unknown : 1.0;
+
   for (int i = 0; i < rows; ++i) {
     for (int j = 0; j < columns; ++j) {
-      char ch = vision[i][j];
-      if (ch < '0' || ch > '8') continue;
-      int need = ch - '0';
-      int flagged = 0, unknown = 0;
+      if (vision[i][j] != '?') continue;
+      double risk_sum = 0.0; int constraints = 0;
       for (int k = 0; k < 8; ++k) {
         int ni = i + dr[k], nj = j + dc[k];
         if (!inb_client(ni, nj)) continue;
-        if (vision[ni][nj] == '@') ++flagged;
-        else if (vision[ni][nj] == '?') ++unknown;
+        char ch = vision[ni][nj];
+        if (ch >= '0' && ch <= '8') {
+          int need = ch - '0';
+          int flagged = 0, unknown = 0;
+          for (int t = 0; t < 8; ++t) {
+            int ai = ni + dr[t], aj = nj + dc[t];
+            if (!inb_client(ai, aj)) continue;
+            if (vision[ai][aj] == '@') ++flagged;
+            else if (vision[ai][aj] == '?') ++unknown;
+          }
+          if (unknown > 0) {
+            double local = (double)std::max(0, need - flagged) / (double)unknown;
+            risk_sum += local;
+            ++constraints;
+          }
+        }
       }
-      if (unknown > 0 && flagged == need) {
-        Execute(i, j, 2);  // auto explore
-        return;
-      }
+      double risk = (constraints > 0) ? (risk_sum / constraints) : global_risk;
+      if (risk < best_score) { best_score = risk; best_r = i; best_c = j; }
     }
   }
+  if (best_r != -1) { Execute(best_r, best_c, 0); return; }
 
-  // Step 3: fallback — visit the first unknown cell
-  for (int i = 0; i < rows; ++i) {
-    for (int j = 0; j < columns; ++j) {
-      if (vision[i][j] == '?') {
-        Execute(i, j, 0);
-        return;
-      }
-    }
-  }
-
-  // If no moves left (shouldn't happen unless finished), just visit (0,0) as a noop
+  // Fallback
   Execute(0, 0, 0);
 }
 
